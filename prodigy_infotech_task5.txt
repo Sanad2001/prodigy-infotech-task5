@@ -1,0 +1,100 @@
+import socket
+import struct
+import textwrap
+
+# Function to format multi-line data for better readability
+def format_multi_line_data(prefix, data_string, line_size=80):
+    line_size -= len(prefix)
+    if isinstance(data_string, bytes):
+        data_string = ''.join(r'\x{:02x}'.format(byte) for byte in data_string)
+        if line_size % 2:
+            line_size -= 1
+    return '\n'.join([prefix + line for line in textwrap.wrap(data_string, line_size)])
+
+# Function to unpack Ethernet frame
+def unpack_ethernet_frame(raw_data):
+    dest_mac, src_mac, protocol = struct.unpack('! 6s 6s H', raw_data[:14])
+    return format_mac_address(dest_mac), format_mac_address(src_mac), socket.htons(protocol), raw_data[14:]
+
+# Function to format MAC address
+def format_mac_address(mac_bytes):
+    mac_address = map('{:02x}'.format, mac_bytes)
+    return ':'.join(mac_address).upper()
+
+# Function to unpack IPv4 packet
+def unpack_ipv4_packet(packet_data):
+    version_header_length = packet_data[0]
+    version = version_header_length >> 4
+    header_length = (version_header_length & 15) * 4
+    ttl, protocol, src_ip, dest_ip = struct.unpack('! 8x B B 2x 4s 4s', packet_data[:20])
+    return version, header_length, ttl, protocol, format_ipv4_address(src_ip), format_ipv4_address(dest_ip), packet_data[header_length:]
+
+# Function to format IPv4 address
+def format_ipv4_address(ip_bytes):
+    return '.'.join(map(str, ip_bytes))
+
+# Function to unpack ICMP packet
+def unpack_icmp_packet(packet_data):
+    icmp_type, code, checksum = struct.unpack('! B B H', packet_data[:4])
+    return icmp_type, code, checksum, packet_data[4:]
+
+# Function to unpack TCP segment
+def unpack_tcp_segment(segment_data):
+    (src_port, dest_port, sequence, acknowledgment, offset_reserved_flags) = struct.unpack('! H H L L H', segment_data[:14])
+    offset = (offset_reserved_flags >> 12) * 4
+    return src_port, dest_port, sequence, acknowledgment, segment_data[offset:]
+
+# Function to unpack UDP segment
+def unpack_udp_segment(segment_data):
+    src_port, dest_port, size = struct.unpack('! H H 2x H', segment_data[:8])
+    return src_port, dest_port, size, segment_data[8:]
+
+# Main function to start packet sniffer
+def main():
+    connection = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(3))
+    while True:
+        raw_packet_data, addr = connection.recvfrom(65536)
+        dest_mac, src_mac, eth_protocol, data_payload = unpack_ethernet_frame(raw_packet_data)
+        print('\nEthernet Frame:')
+        print(f'Destination: {dest_mac}, Source: {src_mac}, Protocol: {eth_protocol}')
+
+        # IPv4
+        if eth_protocol == 8:
+            (version, header_length, ttl, protocol, src_ip, dest_ip, data_payload) = unpack_ipv4_packet(data_payload)
+            print(f'IPv4 Packet:')
+            print(f'\tVersion: {version}, Header Length: {header_length}, TTL: {ttl}')
+            print(f'\tProtocol: {protocol}, Source: {src_ip}, Destination: {dest_ip}')
+
+            # ICMP
+            if protocol == 1:
+                icmp_type, code, checksum, icmp_data = unpack_icmp_packet(data_payload)
+                print(f'\tICMP Packet:')
+                print(f'\t\tType: {icmp_type}, Code: {code}, Checksum: {checksum}')
+                print(f'\t\tData:')
+                print(format_multi_line_data('\t\t\t', icmp_data))
+
+            # TCP
+            elif protocol == 6:
+                src_port, dest_port, sequence, acknowledgment, tcp_data = unpack_tcp_segment(data_payload)
+                print(f'\tTCP Segment:')
+                print(f'\t\tSource Port: {src_port}, Destination Port: {dest_port}')
+                print(f'\t\tSequence: {sequence}, Acknowledgment: {acknowledgment}')
+                print(f'\t\tData:')
+                print(format_multi_line_data('\t\t\t', tcp_data))
+
+            # UDP
+            elif protocol == 17:
+                src_port, dest_port, length, udp_data = unpack_udp_segment(data_payload)
+                print(f'\tUDP Segment:')
+                print(f'\t\tSource Port: {src_port}, Destination Port: {dest_port}, Length: {length}')
+
+            # Other IPv4 protocols
+            else:
+                print(f'\tOther IPv4 Data:')
+                print(format_multi_line_data('\t\t', data_payload))
+        else:
+            print(f'Ethernet Data:')
+            print(format_multi_line_data('\t', data_payload))
+
+if __name__ == "__main__":
+    main()
